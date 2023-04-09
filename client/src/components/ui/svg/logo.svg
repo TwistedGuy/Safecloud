@@ -1,7 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <svg width="164" height="41" viewBox="0 0 164 41" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient gradientUnits="userSpaceOnUse" x1="98.365" y1="1.349" x2="98.365" y2="28.559" id="gradient-0">
+      <stop offset="0" style="stop-color: rgba(0, 119, 255, 1)"/>
+      <stop offset="1" style="stop-color: rgba(0, 71, 153, 1)"/>
+    </linearGradient>
+    <linearGradient gradientUnits="userSpaceOnUse" x1="20.5" y1="0" x2="20.5" y2="41" id="gradient-1">
+      <stop offset="0" style="stop-color: rgba(0, 98, 255, 1)"/>
+      <stop offset="1" style="stop-color: rgba(0, 59, 153, 1)"/>
+    </linearGradient>
+  </defs>
   <g fill-rule="evenodd">
-    <path fill-rule="nonzero" d="M2.831 14.045c.775 4.287 2.266 8.333 4.685 12.143 2.958 4.659 7.21 8.797 12.984 12.319 5.774-3.522 10.026-7.66 12.984-12.319 2.42-3.81 3.91-7.856 4.685-12.143.489-2.706.644-4.844.672-8.003C33.368 3.522 26.636 2.14 20.5 2.14c-6.137 0-12.869 1.381-18.341 3.9.028 3.16.183 5.298.672 8.004zM20.5 0C26.908 0 34.637 1.47 41 4.706c0 6.988.087 24.398-20.5 36.294C-.088 29.104 0 11.694 0 4.706 6.363 1.47 14.092 0 20.5 0z" style=""/>
-    <text style="fill: rgb(0, 111, 255); font-family: &quot;Open Sans&quot;; font-size: 25px; font-weight: 700; white-space: pre;" x="40.448" y="30.275">Safecloud</text>
+    <path fill-rule="nonzero" d="M2.831 14.045c.775 4.287 2.266 8.333 4.685 12.143 2.958 4.659 7.21 8.797 12.984 12.319 5.774-3.522 10.026-7.66 12.984-12.319 2.42-3.81 3.91-7.856 4.685-12.143.489-2.706.644-4.844.672-8.003C33.368 3.522 26.636 2.14 20.5 2.14c-6.137 0-12.869 1.381-18.341 3.9.028 3.16.183 5.298.672 8.004zM20.5 0C26.908 0 34.637 1.47 41 4.706c0 6.988.087 24.398-20.5 36.294C-.088 29.104 0 11.694 0 4.706 6.363 1.47 14.092 0 20.5 0z" style="fill: url(#gradient-1);"/>
+    <text style="fill: url(#gradient-0); font-family: &quot;Open Sans&quot;; font-size: 22px; font-weight: 800; white-space: pre;" x="47.925" y="22.676" dx="-4.536" dy="1.225">Safecloud</text>
+    <text style="fill: rgb(51, 51, 51); font-family: &quot;Open Sans&quot;; font-size: 10px; font-weight: 800; white-space: pre;" x="60.305" y="30.888" dx="74.155" dy="1.961">.ma</text>
   </g>
 </svg>
