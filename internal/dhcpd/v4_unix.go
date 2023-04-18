@@ -20,7 +20,6 @@ import (
 	"github.com/go-ping/ping"
 	"github.com/insomniacslk/dhcp/dhcpv4"
 	"github.com/insomniacslk/dhcp/dhcpv4/server4"
-	"github.com/mdlayher/packet"
 	"golang.org/x/exp/slices"
 )
 
@@ -128,7 +127,7 @@ func (s *v4Server) ResetLeases(leases []*Lease) (err error) {
 	s.leases = nil
 
 	for _, l := range leases {
-		if !l.IsStatic() {
+		if !l.IsStatic {
 			l.Hostname = s.validHostnameForClient(l.Hostname, l.IP)
 		}
 		err = s.addLease(l)
@@ -190,7 +189,7 @@ func (s *v4Server) GetLeases(flags GetLeasesFlags) (leases []*Lease) {
 			continue
 		}
 
-		if getStatic && l.IsStatic() {
+		if getStatic && l.IsStatic {
 			leases = append(leases, l.Clone())
 		}
 	}
@@ -211,7 +210,7 @@ func (s *v4Server) FindMACbyIP(ip netip.Addr) (mac net.HardwareAddr) {
 
 	for _, l := range s.leases {
 		if l.IP == ip {
-			if l.Expiry.After(now) || l.IsStatic() {
+			if l.IsStatic || l.Expiry.After(now) {
 				return l.HWAddr
 			}
 		}
@@ -259,7 +258,7 @@ func (s *v4Server) rmLeaseByIndex(i int) {
 // Return error if a static lease is found
 func (s *v4Server) rmDynamicLease(lease *Lease) (err error) {
 	for i, l := range s.leases {
-		isStatic := l.IsStatic()
+		isStatic := l.IsStatic
 
 		if bytes.Equal(l.HWAddr, lease.HWAddr) || l.IP == lease.IP {
 			if isStatic {
@@ -292,7 +291,7 @@ func (s *v4Server) addLease(l *Lease) (err error) {
 	leaseIP := net.IP(l.IP.AsSlice())
 	offset, inOffset := r.offset(leaseIP)
 
-	if l.IsStatic() {
+	if l.IsStatic {
 		// TODO(a.garipov, d.seregin): Subnet can be nil when dhcp server is
 		// disabled.
 		if sn := s.conf.subnet; !sn.Contains(l.IP) {
@@ -359,6 +358,7 @@ func (s *v4Server) AddStaticLease(l *Lease) (err error) {
 	}
 
 	l.Expiry = time.Unix(leaseExpireStatic, 0)
+	l.IsStatic = true
 
 	err = netutil.ValidateMAC(l.HWAddr)
 	if err != nil {
@@ -528,7 +528,7 @@ func (s *v4Server) nextIP() (ip net.IP) {
 func (s *v4Server) findExpiredLease() int {
 	now := time.Now()
 	for i, lease := range s.leases {
-		if !lease.IsStatic() && lease.Expiry.Before(now) {
+		if !lease.IsStatic && lease.Expiry.Before(now) {
 			return i
 		}
 	}
@@ -860,7 +860,7 @@ func (s *v4Server) handleRequest(req, resp *dhcpv4.DHCPv4) (lease *Lease, needsR
 	s.leasesLock.Lock()
 	defer s.leasesLock.Unlock()
 
-	if lease.IsStatic() {
+	if lease.IsStatic {
 		if lease.Hostname != "" {
 			// TODO(e.burkov):  This option is used to update the server's DNS
 			// mapping.  The option should only be answered when it has been
@@ -1129,56 +1129,6 @@ func (s *v4Server) packetHandler(conn net.PacketConn, peer net.Addr, req *dhcpv4
 	}
 
 	s.send(peer, conn, req, resp)
-}
-
-// send writes resp for peer to conn considering the req's parameters according
-// to RFC-2131.
-//
-// See https://datatracker.ietf.org/doc/html/rfc2131#section-4.1.
-func (s *v4Server) send(peer net.Addr, conn net.PacketConn, req, resp *dhcpv4.DHCPv4) {
-	switch giaddr, ciaddr, mtype := req.GatewayIPAddr, req.ClientIPAddr, resp.MessageType(); {
-	case giaddr != nil && !giaddr.IsUnspecified():
-		// Send any return messages to the server port on the BOOTP
-		// relay agent whose address appears in giaddr.
-		peer = &net.UDPAddr{
-			IP:   giaddr,
-			Port: dhcpv4.ServerPort,
-		}
-		if mtype == dhcpv4.MessageTypeNak {
-			// Set the broadcast bit in the DHCPNAK, so that the relay agent
-			// broadcasts it to the client, because the client may not have
-			// a correct network address or subnet mask, and the client may not
-			// be answering ARP requests.
-			resp.SetBroadcast()
-		}
-	case mtype == dhcpv4.MessageTypeNak:
-		// Broadcast any DHCPNAK messages to 0xffffffff.
-	case ciaddr != nil && !ciaddr.IsUnspecified():
-		// Unicast DHCPOFFER and DHCPACK messages to the address in
-		// ciaddr.
-		peer = &net.UDPAddr{
-			IP:   ciaddr,
-			Port: dhcpv4.ClientPort,
-		}
-	case !req.IsBroadcast() && req.ClientHWAddr != nil:
-		// Unicast DHCPOFFER and DHCPACK messages to the client's
-		// hardware address and yiaddr.
-		peer = &dhcpUnicastAddr{
-			Addr:   packet.Addr{HardwareAddr: req.ClientHWAddr},
-			yiaddr: resp.YourIPAddr,
-		}
-	default:
-		// Go on since peer is already set to broadcast.
-	}
-
-	pktData := resp.ToBytes()
-
-	log.Debug("dhcpv4: sending %d bytes to %s: %s", len(pktData), peer, resp.Summary())
-
-	_, err := conn.WriteTo(pktData, peer)
-	if err != nil {
-		log.Error("dhcpv4: conn.Write to %s failed: %s", peer, err)
-	}
 }
 
 // Start starts the IPv4 DHCP server.
