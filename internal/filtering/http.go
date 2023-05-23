@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/AdguardTeam/AdGuardHome/internal/aghhttp"
@@ -458,6 +459,80 @@ func (d *DNSFilter) handleCheckHost(w http.ResponseWriter, r *http.Request) {
 	_ = aghhttp.WriteJSONResponse(w, r, resp)
 }
 
+// setProtectedBool sets the value of a boolean pointer under a lock.  l must
+// protect the value under ptr.
+//
+// TODO(e.burkov):  Make it generic?
+func setProtectedBool(mu *sync.RWMutex, ptr *bool, val bool) {
+	mu.Lock()
+	defer mu.Unlock()
+
+	*ptr = val
+}
+
+// protectedBool gets the value of a boolean pointer under a read lock.  l must
+// protect the value under ptr.
+//
+// TODO(e.burkov):  Make it generic?
+func protectedBool(mu *sync.RWMutex, ptr *bool) (val bool) {
+	mu.RLock()
+	defer mu.RUnlock()
+
+	return *ptr
+}
+
+// handleSafeBrowsingEnable is the handler for the POST
+// /control/safebrowsing/enable HTTP API.
+func (d *DNSFilter) handleSafeBrowsingEnable(w http.ResponseWriter, r *http.Request) {
+	setProtectedBool(&d.confLock, &d.Config.SafeBrowsingEnabled, true)
+	d.Config.ConfigModified()
+}
+
+// handleSafeBrowsingDisable is the handler for the POST
+// /control/safebrowsing/disable HTTP API.
+func (d *DNSFilter) handleSafeBrowsingDisable(w http.ResponseWriter, r *http.Request) {
+	setProtectedBool(&d.confLock, &d.Config.SafeBrowsingEnabled, false)
+	d.Config.ConfigModified()
+}
+
+// handleSafeBrowsingStatus is the handler for the GET
+// /control/safebrowsing/status HTTP API.
+func (d *DNSFilter) handleSafeBrowsingStatus(w http.ResponseWriter, r *http.Request) {
+	resp := &struct {
+		Enabled bool `json:"enabled"`
+	}{
+		Enabled: protectedBool(&d.confLock, &d.Config.SafeBrowsingEnabled),
+	}
+
+	_ = aghhttp.WriteJSONResponse(w, r, resp)
+}
+
+// handleParentalEnable is the handler for the POST /control/parental/enable
+// HTTP API.
+func (d *DNSFilter) handleParentalEnable(w http.ResponseWriter, r *http.Request) {
+	setProtectedBool(&d.confLock, &d.Config.ParentalEnabled, true)
+	d.Config.ConfigModified()
+}
+
+// handleParentalDisable is the handler for the POST /control/parental/disable
+// HTTP API.
+func (d *DNSFilter) handleParentalDisable(w http.ResponseWriter, r *http.Request) {
+	setProtectedBool(&d.confLock, &d.Config.ParentalEnabled, false)
+	d.Config.ConfigModified()
+}
+
+// handleParentalStatus is the handler for the GET /control/parental/status
+// HTTP API.
+func (d *DNSFilter) handleParentalStatus(w http.ResponseWriter, r *http.Request) {
+	resp := &struct {
+		Enabled bool `json:"enabled"`
+	}{
+		Enabled: protectedBool(&d.confLock, &d.Config.ParentalEnabled),
+	}
+
+	_ = aghhttp.WriteJSONResponse(w, r, resp)
+}
+
 // RegisterFilteringHandlers - register handlers
 func (d *DNSFilter) RegisterFilteringHandlers() {
 	registerHTTP := d.HTTPRegister
@@ -480,6 +555,7 @@ func (d *DNSFilter) RegisterFilteringHandlers() {
 
 	registerHTTP(http.MethodGet, "/control/rewrite/list", d.handleRewriteList)
 	registerHTTP(http.MethodPost, "/control/rewrite/add", d.handleRewriteAdd)
+	registerHTTP(http.MethodPut, "/control/rewrite/update", d.handleRewriteUpdate)
 	registerHTTP(http.MethodPost, "/control/rewrite/delete", d.handleRewriteDelete)
 
 	registerHTTP(http.MethodGet, "/control/blocked_services/services", d.handleBlockedServicesIDs)
