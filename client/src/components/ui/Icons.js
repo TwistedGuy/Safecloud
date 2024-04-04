@@ -1,3 +1,4 @@
+/* eslint-disable react/no-unknown-property */
 import React from 'react';
 
 import './Icons.css';
@@ -223,6 +224,30 @@ const Icons = () => (
                 <path d="M0 0h24v24H0z" fill="#878787" fillOpacity=".01" />
                 <path stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" d="M8.036 10.93l3.93 4.07 4.068-3.93" />
             </g>
+        </symbol>
+
+        <symbol id="calendar" fill="none" height="24" viewBox="0 0 24 24" width="24" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="4" y="5.5" width="16" height="14" rx="3" />
+            <path d="M12 4V7" />
+            <path d="M8 4L8 7" />
+            <path d="M16 4V7" />
+            <path d="M9.7397 15.5V11L8 13" />
+            <path d="M14.7397 15.5V11L13 13" />
+        </symbol>
+
+        <symbol id="watch" fill="none" height="24" viewBox="0 0 24 24" width="24" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M16.1215 12.1213H11.8789V7.87866" />
+        </symbol>
+
+        <symbol id="bullets" width="24" height="24" viewBox="0 0 24 24">
+            <path fillRule="evenodd" clipRule="evenodd" d="M12 7C11.1716 7 10.5 6.32843 10.5 5.5C10.5 4.67157 11.1716 4 12 4C12.8284 4 13.5 4.67157 13.5 5.5C13.5 6.32843 12.8284 7 12 7Z" fill="currentColor" />
+            <path fillRule="evenodd" clipRule="evenodd" d="M12 13.5C11.1716 13.5 10.5 12.8284 10.5 12C10.5 11.1716 11.1716 10.5 12 10.5C12.8284 10.5 13.5 11.1716 13.5 12C13.5 12.8284 12.8284 13.5 12 13.5Z" fill="currentColor" />
+            <path fillRule="evenodd" clipRule="evenodd" d="M12 20C11.1716 20 10.5 19.3284 10.5 18.5C10.5 17.6716 11.1716 17 12 17C12.8284 17 13.5 17.6716 13.5 18.5C13.5 19.3284 12.8284 20 12 20Z" fill="currentColor" />
+        </symbol>
+
+        <symbol id="check" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M5 11.7665L10.5878 17L19 8" />
         </symbol>
     </svg>
 );

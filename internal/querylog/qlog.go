@@ -4,10 +4,10 @@ package querylog
 import (
 	"fmt"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
+	"github.com/AdguardTeam/AdGuardHome/internal/aghalg"
 	"github.com/AdguardTeam/AdGuardHome/internal/aghnet"
 	"github.com/AdguardTeam/AdGuardHome/internal/filtering"
 	"github.com/AdguardTeam/golibs/errors"
@@ -16,32 +16,35 @@ import (
 	"github.com/miekg/dns"
 )
 
-const (
-	queryLogFileName = "querylog.json" // .gz added during compression
-)
+// queryLogFileName is a name of the log file.  ".gz" extension is added later
+// during compression.
+const queryLogFileName = "querylog.json"
 
-// queryLog is a structure that writes and reads the DNS query log
+// queryLog is a structure that writes and reads the DNS query log.
 type queryLog struct {
-	findClient func(ids []string) (c *Client, err error)
-
 	// confMu protects conf.
 	confMu *sync.RWMutex
-	conf   *Config
+
+	conf       *Config
+	anonymizer *aghnet.IPMut
+
+	findClient func(ids []string) (c *Client, err error)
+
+	// buffer contains recent log entries.  The entries in this buffer must not
+	// be modified.
+	buffer *aghalg.RingBuffer[*logEntry]
 
 	// logFile is the path to the log file.
 	logFile string
 
 	// bufferLock protects buffer.
 	bufferLock sync.RWMutex
-	// buffer contains recent log entries.  The entries in this buffer must not
-	// be modified.
-	buffer []*logEntry
 
-	fileFlushLock sync.Mutex // synchronize a file-flushing goroutine and main thread
-	flushPending  bool       // don't start another goroutine while the previous one is still running
+	// fileFlushLock synchronizes a file-flushing goroutine and main thread.
+	fileFlushLock sync.Mutex
 	fileWriteLock sync.Mutex
 
-	anonymizer *aghnet.IPMut
+	flushPending bool
 }
 
 // ClientProto values are names of the client protocols.
@@ -125,7 +128,6 @@ func (l *queryLog) WriteDiskConfig(c *Config) {
 	defer l.confMu.RUnlock()
 
 	*c = *l.conf
-	c.Ignored = l.conf.Ignored.Clone()
 }
 
 // Clear memory buffer and remove log files
@@ -137,7 +139,7 @@ func (l *queryLog) clear() {
 		l.bufferLock.Lock()
 		defer l.bufferLock.Unlock()
 
-		l.buffer = nil
+		l.buffer.Clear()
 		l.flushPending = false
 	}()
 
@@ -155,38 +157,15 @@ func (l *queryLog) clear() {
 	log.Debug("querylog: cleared")
 }
 
-func (l *queryLog) Add(params *AddParams) {
-	var isEnabled, fileIsEnabled bool
-	var memSize uint32
-	func() {
-		l.confMu.RLock()
-		defer l.confMu.RUnlock()
-
-		isEnabled, fileIsEnabled = l.conf.Enabled, l.conf.FileEnabled
-		memSize = l.conf.MemSize
-	}()
-
-	if !isEnabled {
-		return
-	}
-
-	err := params.validate()
-	if err != nil {
-		log.Error("querylog: adding record: %s, skipping", err)
-
-		return
-	}
-
-	if params.Result == nil {
-		params.Result = &filtering.Result{}
-	}
-
-	now := time.Now()
+// newLogEntry creates an instance of logEntry from parameters.
+func newLogEntry(params *AddParams) (entry *logEntry) {
 	q := params.Question.Question[0]
-	entry := &logEntry{
-		Time: now,
+	qHost := aghnet.NormalizeDomain(q.Name)
 
-		QHost:  strings.ToLower(q.Name[:len(q.Name)-1]),
+	entry = &logEntry{
+		// TODO(d.kolyshev): Export this timestamp to func params.
+		Time:   time.Now(),
+		QHost:  qHost,
 		QType:  dns.Type(q.Qtype).String(),
 		QClass: dns.Class(q.Qclass).String(),
 
@@ -211,36 +190,51 @@ func (l *queryLog) Add(params *AddParams) {
 	entry.addResponse(params.Answer, false)
 	entry.addResponse(params.OrigAnswer, true)
 
-	needFlush := false
+	return entry
+}
+
+// Add implements the [QueryLog] interface for *queryLog.
+func (l *queryLog) Add(params *AddParams) {
+	var isEnabled, fileIsEnabled bool
+	var memSize uint
 	func() {
-		l.bufferLock.Lock()
-		defer l.bufferLock.Unlock()
+		l.confMu.RLock()
+		defer l.confMu.RUnlock()
 
-		l.buffer = append(l.buffer, entry)
-
-		if !fileIsEnabled {
-			if len(l.buffer) > int(memSize) {
-				// Writing to file is disabled, so just remove the oldest entry
-				// from the slices.
-				//
-				// TODO(a.garipov): This should be replaced by a proper ring
-				// buffer, but it's currently difficult to do that.
-				l.buffer[0] = nil
-				l.buffer = l.buffer[1:]
-			}
-		} else if !l.flushPending {
-			needFlush = len(l.buffer) >= int(memSize)
-			if needFlush {
-				l.flushPending = true
-			}
-		}
+		isEnabled, fileIsEnabled = l.conf.Enabled, l.conf.FileEnabled
+		memSize = l.conf.MemSize
 	}()
 
-	if needFlush {
+	if !isEnabled {
+		return
+	}
+
+	err := params.validate()
+	if err != nil {
+		log.Error("querylog: adding record: %s, skipping", err)
+
+		return
+	}
+
+	if params.Result == nil {
+		params.Result = &filtering.Result{}
+	}
+
+	entry := newLogEntry(params)
+
+	l.bufferLock.Lock()
+	defer l.bufferLock.Unlock()
+
+	l.buffer.Append(entry)
+
+	if !l.flushPending && fileIsEnabled && l.buffer.Len() >= memSize {
+		l.flushPending = true
+
+		// TODO(s.chzhen):  Fix occasional rewrite of entires.
 		go func() {
 			flushErr := l.flushLogBuffer()
 			if flushErr != nil {
-				log.Error("querylog: flushing after adding: %s", err)
+				log.Error("querylog: flushing after adding: %s", flushErr)
 			}
 		}()
 	}

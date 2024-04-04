@@ -8,11 +8,13 @@ import (
 	"encoding/gob"
 	"fmt"
 	"net"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/AdguardTeam/AdGuardHome/internal/filtering"
+	"github.com/AdguardTeam/AdGuardHome/internal/filtering/rulelist"
 	"github.com/AdguardTeam/golibs/cache"
 	"github.com/AdguardTeam/golibs/log"
 	"github.com/AdguardTeam/urlfilter"
@@ -97,7 +99,7 @@ func NewDefault(
 		cacheTTL:  cacheTTL,
 	}
 
-	err = ss.resetEngine(filtering.SafeSearchListID, conf)
+	err = ss.resetEngine(rulelist.URLFilterIDSafeSearch, conf)
 	if err != nil {
 		// Don't wrap the error, because it's informative enough as is.
 		return nil, err
@@ -161,12 +163,8 @@ func (ss *Default) resetEngine(
 // type check
 var _ filtering.SafeSearch = (*Default)(nil)
 
-// CheckHost implements the [filtering.SafeSearch] interface for
-// *DefaultSafeSearch.
-func (ss *Default) CheckHost(
-	host string,
-	qtype rules.RRType,
-) (res filtering.Result, err error) {
+// CheckHost implements the [filtering.SafeSearch] interface for *Default.
+func (ss *Default) CheckHost(host string, qtype rules.RRType) (res filtering.Result, err error) {
 	start := time.Now()
 	defer func() {
 		ss.log(log.DEBUG, "lookup for %q finished in %s", host, time.Since(start))
@@ -196,14 +194,10 @@ func (ss *Default) CheckHost(
 		return filtering.Result{}, err
 	}
 
-	if fltRes != nil {
-		res = *fltRes
-		ss.setCacheResult(host, qtype, res)
+	res = *fltRes
+	ss.setCacheResult(host, qtype, res)
 
-		return res, nil
-	}
-
-	return filtering.Result{}, fmt.Errorf("no ipv4 addresses for %q", host)
+	return res, nil
 }
 
 // searchHost looks up DNS rewrites in the internal DNS filtering engine.
@@ -229,23 +223,28 @@ func (ss *Default) searchHost(host string, qtype rules.RRType) (res *rules.DNSRe
 }
 
 // newResult creates Result object from rewrite rule.  qtype must be either
-// [dns.TypeA] or [dns.TypeAAAA].
+// [dns.TypeA] or [dns.TypeAAAA].  If err is nil, res is never nil, so that the
+// empty result is converted into a NODATA response.
+//
+// TODO(a.garipov): Use the main rewrite result mechanism used in
+// [dnsforward.Server.filterDNSRequest].  Now we resolve IPs for CNAME to save
+// them in the safe search cache.
 func (ss *Default) newResult(
 	rewrite *rules.DNSRewrite,
 	qtype rules.RRType,
 ) (res *filtering.Result, err error) {
 	res = &filtering.Result{
 		Rules: []*filtering.ResultRule{{
-			FilterListID: filtering.SafeSearchListID,
+			FilterListID: rulelist.URLFilterIDSafeSearch,
 		}},
 		Reason:     filtering.FilteredSafeSearch,
 		IsFiltered: true,
 	}
 
 	if rewrite.RRType == qtype {
-		ip, ok := rewrite.Value.(net.IP)
-		if !ok || ip == nil {
-			return nil, nil
+		ip, ok := rewrite.Value.(netip.Addr)
+		if !ok || ip == (netip.Addr{}) {
+			return nil, fmt.Errorf("expected ip rewrite value, got %T(%[1]v)", rewrite.Value)
 		}
 
 		res.Rules[0].IP = ip
@@ -255,14 +254,16 @@ func (ss *Default) newResult(
 
 	host := rewrite.NewCNAME
 	if host == "" {
-		return nil, nil
+		return res, nil
 	}
+
+	res.CanonName = host
 
 	ss.log(log.DEBUG, "resolving %q", host)
 
 	ips, err := ss.resolver.LookupIP(context.Background(), qtypeToProto(qtype), host)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("resolving cname: %w", err)
 	}
 
 	ss.log(log.DEBUG, "resolved %s", ips)
@@ -270,17 +271,16 @@ func (ss *Default) newResult(
 	for _, ip := range ips {
 		// TODO(a.garipov): Remove this filtering once the resolver we use
 		// actually learns about network.
-		ip = fitToProto(ip, qtype)
-		if ip == nil {
+		addr := fitToProto(ip, qtype)
+		if addr == (netip.Addr{}) {
 			continue
 		}
 
-		res.Rules[0].IP = ip
-
-		return res, nil
+		// TODO(e.burkov):  Rules[0]?
+		res.Rules[0].IP = addr
 	}
 
-	return nil, nil
+	return res, nil
 }
 
 // qtypeToProto returns "ip4" for [dns.TypeA] and "ip6" for [dns.TypeAAAA].
@@ -298,17 +298,16 @@ func qtypeToProto(qtype rules.RRType) (proto string) {
 
 // fitToProto returns a non-nil IP address if ip is the correct protocol version
 // for qtype.  qtype is expected to be either [dns.TypeA] or [dns.TypeAAAA].
-func fitToProto(ip net.IP, qtype rules.RRType) (res net.IP) {
-	ip4 := ip.To4()
-	if qtype == dns.TypeA {
-		return ip4
+func fitToProto(ip net.IP, qtype rules.RRType) (res netip.Addr) {
+	if ip4 := ip.To4(); qtype == dns.TypeA {
+		if ip4 != nil {
+			return netip.AddrFrom4([4]byte(ip4))
+		}
+	} else if ip = ip.To16(); ip != nil && qtype == dns.TypeAAAA {
+		return netip.AddrFrom16([16]byte(ip))
 	}
 
-	if ip4 == nil {
-		return ip
-	}
-
-	return nil
+	return netip.Addr{}
 }
 
 // setCacheResult stores data in cache for host.  qtype is expected to be either
@@ -370,7 +369,7 @@ func (ss *Default) Update(conf filtering.SafeSearchConfig) (err error) {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 
-	err = ss.resetEngine(filtering.SafeSearchListID, conf)
+	err = ss.resetEngine(rulelist.URLFilterIDSafeSearch, conf)
 	if err != nil {
 		// Don't wrap the error, because it's informative enough as is.
 		return err

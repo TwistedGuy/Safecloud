@@ -274,6 +274,8 @@ class Api {
 
     DHCP_REMOVE_STATIC_LEASE = { path: 'dhcp/remove_static_lease', method: 'POST' };
 
+    DHCP_UPDATE_STATIC_LEASE = { path: 'dhcp/update_static_lease', method: 'POST' };
+
     DHCP_RESET = { path: 'dhcp/reset', method: 'POST' };
 
     DHCP_LEASES_RESET = { path: 'dhcp/reset_leases', method: 'POST' };
@@ -314,6 +316,14 @@ class Api {
 
     removeStaticLease(config) {
         const { path, method } = this.DHCP_REMOVE_STATIC_LEASE;
+        const parameters = {
+            data: config,
+        };
+        return this.makeRequest(path, method, parameters);
+    }
+
+    updateStaticLease(config) {
+        const { path, method } = this.DHCP_UPDATE_STATIC_LEASE;
         const parameters = {
             data: config,
         };
@@ -455,6 +465,8 @@ class Api {
 
     REWRITE_ADD = { path: 'rewrite/add', method: 'POST' };
 
+    REWRITE_UPDATE = { path: 'rewrite/update', method: 'PUT' };
+
     REWRITE_DELETE = { path: 'rewrite/delete', method: 'POST' };
 
     getRewritesList() {
@@ -470,6 +482,14 @@ class Api {
         return this.makeRequest(path, method, parameters);
     }
 
+    updateRewrite(config) {
+        const { path, method } = this.REWRITE_UPDATE;
+        const parameters = {
+            data: config,
+        };
+        return this.makeRequest(path, method, parameters);
+    }
+
     deleteRewrite(config) {
         const { path, method } = this.REWRITE_DELETE;
         const parameters = {
@@ -479,9 +499,9 @@ class Api {
     }
 
     // Blocked services
-    BLOCKED_SERVICES_LIST = { path: 'blocked_services/list', method: 'GET' };
+    BLOCKED_SERVICES_GET = { path: 'blocked_services/get', method: 'GET' };
 
-    BLOCKED_SERVICES_SET = { path: 'blocked_services/set', method: 'POST' };
+    BLOCKED_SERVICES_UPDATE = { path: 'blocked_services/update', method: 'PUT' };
 
     BLOCKED_SERVICES_ALL = { path: 'blocked_services/all', method: 'GET' };
 
@@ -491,12 +511,12 @@ class Api {
     }
 
     getBlockedServices() {
-        const { path, method } = this.BLOCKED_SERVICES_LIST;
+        const { path, method } = this.BLOCKED_SERVICES_GET;
         return this.makeRequest(path, method);
     }
 
-    setBlockedServices(config) {
-        const { path, method } = this.BLOCKED_SERVICES_SET;
+    updateBlockedServices(config) {
+        const { path, method } = this.BLOCKED_SERVICES_UPDATE;
         const parameters = {
             data: config,
         };

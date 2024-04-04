@@ -33,8 +33,13 @@ const (
 // daemon.
 type program struct {
 	clientBuildFS fs.FS
+	signals       chan os.Signal
+	done          chan struct{}
 	opts          options
 }
+
+// type check
+var _ service.Interface = (*program)(nil)
 
 // Start implements service.Interface interface for *program.
 func (p *program) Start(_ service.Service) (err error) {
@@ -42,19 +47,19 @@ func (p *program) Start(_ service.Service) (err error) {
 	args := p.opts
 	args.runningAsService = true
 
-	go run(args, p.clientBuildFS)
+	go run(args, p.clientBuildFS, p.done)
 
 	return nil
 }
 
 // Stop implements service.Interface interface for *program.
-func (p *program) Stop(_ service.Service) error {
-	// Stop should not block.  Return with a few seconds.
-	if Context.appSignalChannel == nil {
-		os.Exit(0)
-	}
+func (p *program) Stop(_ service.Service) (err error) {
+	log.Info("service: stopping: waiting for cleanup")
 
-	Context.appSignalChannel <- syscall.SIGINT
+	aghos.SendShutdownSignal(p.signals)
+
+	// Wait for other goroutines to complete their job.
+	<-p.done
 
 	return nil
 }
@@ -194,7 +199,12 @@ func restartService() (err error) {
 //   - run:  This is a special command that is not supposed to be used directly
 //     it is specified when we register a service, and it indicates to the app
 //     that it is being run as a service/daemon.
-func handleServiceControlAction(opts options, clientBuildFS fs.FS) {
+func handleServiceControlAction(
+	opts options,
+	clientBuildFS fs.FS,
+	signals chan os.Signal,
+	done chan struct{},
+) {
 	// Call chooseSystem explicitly to introduce OpenBSD support for service
 	// package.  It's a noop for other GOOS values.
 	chooseSystem()
@@ -217,16 +227,24 @@ func handleServiceControlAction(opts options, clientBuildFS fs.FS) {
 	runOpts := opts
 	runOpts.serviceControlAction = "run"
 
+	args := optsToArgs(runOpts)
+	log.Debug("service: using args %q", args)
+
 	svcConfig := &service.Config{
 		Name:             serviceName,
 		DisplayName:      serviceDisplayName,
 		Description:      serviceDescription,
 		WorkingDirectory: pwd,
-		Arguments:        optsToArgs(runOpts),
+		Arguments:        args,
 	}
 	configureService(svcConfig)
 
-	s, err := service.New(&program{clientBuildFS: clientBuildFS, opts: runOpts}, svcConfig)
+	s, err := service.New(&program{
+		clientBuildFS: clientBuildFS,
+		signals:       signals,
+		done:          done,
+		opts:          runOpts,
+	}, svcConfig)
 	if err != nil {
 		log.Fatalf("service: initializing service: %s", err)
 	}
@@ -253,10 +271,11 @@ func handleServiceCommand(s service.Service, action string, opts options) (err e
 			return fmt.Errorf("failed to run service: %w", err)
 		}
 	case "install":
-		initConfigFilename(opts)
 		if err = initWorkingDir(opts); err != nil {
 			return fmt.Errorf("failed to init working dir: %w", err)
 		}
+
+		initConfigFilename(opts)
 
 		handleServiceInstallCommand(s)
 	case "uninstall":

@@ -6,16 +6,18 @@ import (
 	"io/fs"
 	"net/http"
 	"net/netip"
+	"runtime"
 	"sync"
 	"time"
 
 	"github.com/AdguardTeam/AdGuardHome/internal/aghhttp"
 	"github.com/AdguardTeam/AdGuardHome/internal/aghnet"
+	"github.com/AdguardTeam/AdGuardHome/internal/updater"
 	"github.com/AdguardTeam/golibs/errors"
 	"github.com/AdguardTeam/golibs/log"
 	"github.com/AdguardTeam/golibs/netutil"
+	"github.com/AdguardTeam/golibs/pprofutil"
 	"github.com/NYTimes/gziphandler"
-	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
@@ -33,10 +35,12 @@ const (
 )
 
 type webConfig struct {
+	updater *updater.Updater
+
 	clientFS fs.FS
 
-	BindHost netip.Addr
-	BindPort int
+	// BindAddr is the binding address with port for plain HTTP web interface.
+	BindAddr netip.AddrPort
 
 	// ReadTimeout is an option to pass to http.Server for setting an
 	// appropriate field.
@@ -51,6 +55,13 @@ type webConfig struct {
 	WriteTimeout time.Duration
 
 	firstRun bool
+
+	// disableUpdate, if true, tells AdGuard Home to not check for updates.
+	disableUpdate bool
+
+	// runningAsService flag is set to true when options are passed from the
+	// service runner.
+	runningAsService bool
 
 	serveHTTP3 bool
 }
@@ -102,7 +113,7 @@ func newWebAPI(conf *webConfig) (w *webAPI) {
 		Context.mux.Handle("/install.html", preInstallHandler(clientFS))
 		w.registerInstallHandlers()
 	} else {
-		registerControlHandlers()
+		registerControlHandlers(w)
 	}
 
 	w.httpsServer.cond = sync.NewCond(&w.httpsServer.condLock)
@@ -114,12 +125,14 @@ func newWebAPI(conf *webConfig) (w *webAPI) {
 // available, unless the HTTPS server isn't active.
 //
 // TODO(a.garipov): Adapt for HTTP/3.
-func webCheckPortAvailable(port int) (ok bool) {
+func webCheckPortAvailable(port uint16) (ok bool) {
 	if Context.web.httpsServer.server != nil {
 		return true
 	}
 
-	return aghnet.CheckPort("tcp", netip.AddrPortFrom(config.BindHost, uint16(port))) == nil
+	addrPort := netip.AddrPortFrom(config.HTTPConfig.Address.Addr(), port)
+
+	return aghnet.CheckPort("tcp", addrPort) == nil
 }
 
 // tlsConfigChanged updates the TLS configuration and restarts the HTTPS server
@@ -172,10 +185,9 @@ func (web *webAPI) start() {
 		hdlr := h2c.NewHandler(withMiddlewares(Context.mux, limitRequestBody), &http2.Server{})
 
 		// Create a new instance, because the Web is not usable after Shutdown.
-		hostStr := web.conf.BindHost.String()
 		web.httpServer = &http.Server{
 			ErrorLog:          log.StdLog("web: plain", log.DEBUG),
-			Addr:              netutil.JoinHostPort(hostStr, web.conf.BindPort),
+			Addr:              web.conf.BindAddr.String(),
 			Handler:           hdlr,
 			ReadTimeout:       web.conf.ReadTimeout,
 			ReadHeaderTimeout: web.conf.ReadHeaderTimeout,
@@ -236,7 +248,7 @@ func (web *webAPI) tlsServerLoop() {
 
 		web.httpsServer.cond.L.Unlock()
 
-		var portHTTPS int
+		var portHTTPS uint16
 		func() {
 			config.RLock()
 			defer config.RUnlock()
@@ -244,7 +256,7 @@ func (web *webAPI) tlsServerLoop() {
 			portHTTPS = config.TLS.PortHTTPS
 		}()
 
-		addr := netutil.JoinHostPort(web.conf.BindHost.String(), portHTTPS)
+		addr := netip.AddrPortFrom(web.conf.BindAddr.Addr(), portHTTPS).String()
 		web.httpsServer.server = &http.Server{
 			ErrorLog: log.StdLog("web: https", log.DEBUG),
 			Addr:     addr,
@@ -293,8 +305,29 @@ func (web *webAPI) mustStartHTTP3(address string) {
 
 	log.Debug("web: starting http/3 server")
 	err := web.httpsServer.server3.ListenAndServe()
-	if !errors.Is(err, quic.ErrServerClosed) {
+	if !errors.Is(err, http.ErrServerClosed) {
 		cleanupAlways()
 		log.Fatalf("web: http3: %s", err)
 	}
+}
+
+// startPprof launches the debug and profiling server on the provided port.
+func startPprof(port uint16) {
+	addr := netip.AddrPortFrom(netutil.IPv4Localhost(), port)
+
+	runtime.SetBlockProfileRate(1)
+	runtime.SetMutexProfileFraction(1)
+
+	mux := http.NewServeMux()
+	pprofutil.RoutePprof(mux)
+
+	go func() {
+		defer log.OnPanic("pprof server")
+
+		log.Info("pprof: listening on %q", addr)
+		err := http.ListenAndServe(addr.String(), mux)
+		if !errors.Is(err, http.ErrServerClosed) {
+			log.Error("pprof: shutting down: %s", err)
+		}
+	}()
 }

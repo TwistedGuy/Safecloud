@@ -7,7 +7,6 @@ import { Trans, withTranslation } from 'react-i18next';
 import flow from 'lodash/flow';
 import { connect } from 'react-redux';
 
-
 import {
     renderRadioField,
     toNumber,
@@ -25,6 +24,7 @@ import {
     CUSTOM_INTERVAL,
     RETENTION_RANGE,
 } from '../../../helpers/constants';
+import { trimLinesAndRemoveEmpty } from '../../../helpers/helpers';
 import '../FormButton.css';
 
 const getIntervalTitle = (intervalMs, t) => {
@@ -136,6 +136,7 @@ let Form = (props) => {
                     component={renderTextareaField}
                     placeholder={t('ignore_domains')}
                     disabled={processing}
+                    normalizeOnBlur={trimLinesAndRemoveEmpty}
                 />
             </div>
             <div className="mt-5">

@@ -28,7 +28,7 @@ import {
 } from '../../helpers/constants';
 import { getLogsUrlParams, setHtmlLangAttr, setUITheme } from '../../helpers/helpers';
 import Header from '../Header';
-import { changeLanguage, getDnsStatus } from '../../actions';
+import { changeLanguage, getDnsStatus, getTimerStatus } from '../../actions';
 
 import Dashboard from '../../containers/Dashboard';
 import SetupGuide from '../../containers/SetupGuide';
@@ -126,6 +126,18 @@ const App = () => {
 
     useEffect(() => {
         dispatch(getDnsStatus());
+
+        const handleVisibilityChange = () => {
+            if (document.visibilityState === 'visible') {
+                dispatch(getTimerStatus());
+            }
+        };
+
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+
+        return () => {
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+        };
     }, []);
 
     const setLanguage = () => {
@@ -192,7 +204,7 @@ const App = () => {
         <LoadingBar className="loading-bar" updateTime={1000} />
         <Header />
         <ProtectionTimer />
-        <div className="container container--wrap pb-5">
+        <div className="container container--wrap pb-5 pt-5">
             {processing && <Loading />}
             {!isCoreRunning && <div className="row row-cards">
                 <div className="col-lg-12">

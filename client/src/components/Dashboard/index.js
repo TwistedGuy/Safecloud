@@ -9,7 +9,12 @@ import Counters from './Counters';
 import Clients from './Clients';
 import QueriedDomains from './QueriedDomains';
 import BlockedDomains from './BlockedDomains';
-import { DISABLE_PROTECTION_TIMINGS, ONE_SECOND_IN_MS, SETTINGS_URLS } from '../../helpers/constants';
+import {
+    DISABLE_PROTECTION_TIMINGS,
+    ONE_SECOND_IN_MS,
+    SETTINGS_URLS,
+    TIME_UNITS,
+} from '../../helpers/constants';
 import {
     msToSeconds,
     msToMinutes,
@@ -21,6 +26,8 @@ import PageTitle from '../ui/PageTitle';
 import Loading from '../ui/Loading';
 import './Dashboard.css';
 import Dropdown from '../ui/Dropdown';
+import UpstreamResponses from './UpstreamResponses';
+import UpstreamAvgTime from './UpstreamAvgTime';
 
 const Dashboard = ({
     getAccessList,
@@ -44,15 +51,18 @@ const Dashboard = ({
         getAllStats();
     }, []);
     const getSubtitle = () => {
-        const ONE_DAY = 1;
-        const intervalInDays = msToDays(stats.interval);
-
-        if (intervalInDays < ONE_DAY) {
+        if (!stats.enabled) {
             return t('stats_disabled_short');
         }
 
-        return intervalInDays === ONE_DAY
-            ? t('for_last_24_hours')
+        const msIn7Days = 604800000;
+
+        if (stats.timeUnits === TIME_UNITS.HOURS && stats.interval === msIn7Days) {
+            return t('for_last_days', { count: msToDays(stats.interval) });
+        }
+
+        return stats.timeUnits === TIME_UNITS.HOURS
+            ? t('for_last_hours', { count: msToHours(stats.interval) })
             : t('for_last_days', { count: msToDays(stats.interval) });
     };
 
@@ -136,12 +146,12 @@ const Dashboard = ({
         <PageTitle title={t('dashboard')} containerClass="page-title--dashboard">
             <div className="page-title__protection">
                 <button
-                        type="button"
-                        className={buttonClass}
-                        onClick={() => {
-                            toggleProtection(protectionEnabled);
-                        }}
-                        disabled={processingProtection}
+                    type="button"
+                    className={buttonClass}
+                    onClick={() => {
+                        toggleProtection(protectionEnabled);
+                    }}
+                    disabled={processingProtection}
                 >
                     {protectionDisabledDuration
                         ? `${t('enable_protection_timer')} ${getRemaningTimeText(protectionDisabledDuration)}`
@@ -160,9 +170,9 @@ const Dashboard = ({
                 </Dropdown>}
             </div>
             <button
-                    type="button"
-                    className="btn btn-outline-primary btn-sm"
-                    onClick={getAllStats}
+                type="button"
+                className="btn btn-outline-primary btn-sm"
+                onClick={getAllStats}
             >
                 <Trans>refresh_statics</Trans>
             </button>
@@ -185,53 +195,67 @@ const Dashboard = ({
                     </div>
                 )}
                 <Statistics
-                        interval={msToDays(stats.interval)}
-                        dnsQueries={stats.dnsQueries}
-                        blockedFiltering={stats.blockedFiltering}
-                        replacedSafebrowsing={stats.replacedSafebrowsing}
-                        replacedParental={stats.replacedParental}
-                        numDnsQueries={stats.numDnsQueries}
-                        numBlockedFiltering={stats.numBlockedFiltering}
-                        numReplacedSafebrowsing={stats.numReplacedSafebrowsing}
-                        numReplacedParental={stats.numReplacedParental}
-                        refreshButton={refreshButton}
+                    interval={msToDays(stats.interval)}
+                    dnsQueries={stats.dnsQueries}
+                    blockedFiltering={stats.blockedFiltering}
+                    replacedSafebrowsing={stats.replacedSafebrowsing}
+                    replacedParental={stats.replacedParental}
+                    numDnsQueries={stats.numDnsQueries}
+                    numBlockedFiltering={stats.numBlockedFiltering}
+                    numReplacedSafebrowsing={stats.numReplacedSafebrowsing}
+                    numReplacedParental={stats.numReplacedParental}
+                    refreshButton={refreshButton}
                 />
             </div>
             <div className="col-lg-6">
                 <Counters
-                        subtitle={subtitle}
-                        refreshButton={refreshButton}
+                    subtitle={subtitle}
+                    refreshButton={refreshButton}
                 />
             </div>
             <div className="col-lg-6">
                 <Clients
-                        subtitle={subtitle}
-                        dnsQueries={stats.numDnsQueries}
-                        topClients={stats.topClients}
-                        clients={dashboard.clients}
-                        autoClients={dashboard.autoClients}
-                        refreshButton={refreshButton}
-                        processingAccessSet={access.processingSet}
-                        disallowedClients={access.disallowed_clients}
+                    subtitle={subtitle}
+                    dnsQueries={stats.numDnsQueries}
+                    topClients={stats.topClients}
+                    clients={dashboard.clients}
+                    autoClients={dashboard.autoClients}
+                    refreshButton={refreshButton}
+                    processingAccessSet={access.processingSet}
+                    disallowedClients={access.disallowed_clients}
                 />
             </div>
             <div className="col-lg-6">
                 <QueriedDomains
-                        subtitle={subtitle}
-                        dnsQueries={stats.numDnsQueries}
-                        topQueriedDomains={stats.topQueriedDomains}
-                        refreshButton={refreshButton}
+                    subtitle={subtitle}
+                    dnsQueries={stats.numDnsQueries}
+                    topQueriedDomains={stats.topQueriedDomains}
+                    refreshButton={refreshButton}
                 />
             </div>
             <div className="col-lg-6">
                 <BlockedDomains
-                        subtitle={subtitle}
-                        topBlockedDomains={stats.topBlockedDomains}
-                        blockedFiltering={stats.numBlockedFiltering}
-                        replacedSafebrowsing={stats.numReplacedSafebrowsing}
-                        replacedSafesearch={stats.numReplacedSafesearch}
-                        replacedParental={stats.numReplacedParental}
-                        refreshButton={refreshButton}
+                    subtitle={subtitle}
+                    topBlockedDomains={stats.topBlockedDomains}
+                    blockedFiltering={stats.numBlockedFiltering}
+                    replacedSafebrowsing={stats.numReplacedSafebrowsing}
+                    replacedSafesearch={stats.numReplacedSafesearch}
+                    replacedParental={stats.numReplacedParental}
+                    refreshButton={refreshButton}
+                />
+            </div>
+            <div className="col-lg-6">
+                <UpstreamResponses
+                    subtitle={subtitle}
+                    topUpstreamsResponses={stats.topUpstreamsResponses}
+                    refreshButton={refreshButton}
+                />
+            </div>
+            <div className="col-lg-6">
+                <UpstreamAvgTime
+                    subtitle={subtitle}
+                    topUpstreamsAvgTime={stats.topUpstreamsAvgTime}
+                    refreshButton={refreshButton}
                 />
             </div>
         </div>}

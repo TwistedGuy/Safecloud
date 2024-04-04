@@ -1,6 +1,11 @@
 import { handleActions } from 'redux-actions';
 import { normalizeTopClients } from '../helpers/helpers';
-import { DAY, HOUR, STATS_INTERVALS_DAYS } from '../helpers/constants';
+import {
+    DAY,
+    HOUR,
+    STATS_INTERVALS_DAYS,
+    TIME_UNITS,
+} from '../helpers/constants';
 
 import * as actions from '../actions/stats';
 
@@ -18,6 +23,7 @@ const defaultStats = {
     numReplacedSafebrowsing: 0,
     numReplacedSafesearch: 0,
     avgProcessingTime: 0,
+    timeUnits: TIME_UNITS.HOURS,
 };
 
 const stats = handleActions(
@@ -58,6 +64,9 @@ const stats = handleActions(
                 num_replaced_safebrowsing: numReplacedSafebrowsing,
                 num_replaced_safesearch: numReplacedSafesearch,
                 avg_processing_time: avgProcessingTime,
+                top_upstreams_responses: topUpstreamsResponses,
+                top_upstrems_avg_time: topUpstreamsAvgTime,
+                time_units: timeUnits,
             } = payload;
 
             const newState = {
@@ -77,6 +86,9 @@ const stats = handleActions(
                 numReplacedSafebrowsing,
                 numReplacedSafesearch,
                 avgProcessingTime,
+                topUpstreamsResponses,
+                topUpstreamsAvgTime,
+                timeUnits,
             };
 
             return newState;

@@ -15,7 +15,6 @@ import (
 	"github.com/AdguardTeam/AdGuardHome/internal/version"
 	"github.com/AdguardTeam/golibs/httphdr"
 	"github.com/AdguardTeam/golibs/log"
-	"github.com/AdguardTeam/golibs/mathutil"
 	"github.com/AdguardTeam/golibs/netutil"
 	"github.com/NYTimes/gziphandler"
 )
@@ -24,11 +23,9 @@ import (
 // addresses to a slice of strings.
 func appendDNSAddrs(dst []string, addrs ...netip.Addr) (res []string) {
 	for _, addr := range addrs {
-		var hostport string
-		if config.DNS.Port != defaultPortDNS {
-			hostport = netip.AddrPortFrom(addr, uint16(config.DNS.Port)).String()
-		} else {
-			hostport = addr.String()
+		hostport := addr.String()
+		if p := config.DNS.Port; p != defaultPortDNS {
+			hostport = netutil.JoinHostPort(hostport, p)
 		}
 
 		dst = append(dst, hostport)
@@ -102,8 +99,8 @@ type statusResponse struct {
 	Version  string   `json:"version"`
 	Language string   `json:"language"`
 	DNSAddrs []string `json:"dns_addresses"`
-	DNSPort  int      `json:"dns_port"`
-	HTTPPort int      `json:"http_port"`
+	DNSPort  uint16   `json:"dns_port"`
+	HTTPPort uint16   `json:"http_port"`
 
 	// ProtectionDisabledDuration is the duration of the protection pause in
 	// milliseconds.
@@ -127,12 +124,12 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var (
-		fltConf                 *dnsforward.FilteringConfig
+		fltConf                 *dnsforward.Config
 		protectionDisabledUntil *time.Time
 		protectionEnabled       bool
 	)
 	if Context.dnsServer != nil {
-		fltConf = &dnsforward.FilteringConfig{}
+		fltConf = &dnsforward.Config{}
 		Context.dnsServer.WriteDiskConfig(fltConf)
 		protectionEnabled, protectionDisabledUntil = Context.dnsServer.UpdatedProtectionStatus()
 	}
@@ -147,10 +144,7 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 			// Make sure that we don't send negative numbers to the frontend,
 			// since enough time might have passed to make the difference less
 			// than zero.
-			protectionDisabledDuration = mathutil.Max(
-				0,
-				time.Until(*protectionDisabledUntil).Milliseconds(),
-			)
+			protectionDisabledDuration = max(0, time.Until(*protectionDisabledUntil).Milliseconds())
 		}
 
 		resp = statusResponse{
@@ -158,7 +152,7 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 			Language:                   config.Language,
 			DNSAddrs:                   dnsAddrs,
 			DNSPort:                    config.DNS.Port,
-			HTTPPort:                   config.BindPort,
+			HTTPPort:                   config.HTTPConfig.Address.Port(),
 			ProtectionDisabledDuration: protectionDisabledDuration,
 			ProtectionEnabled:          protectionEnabled,
 			IsRunning:                  isRunning(),
@@ -170,18 +164,22 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 		resp.IsDHCPAvailable = Context.dhcpServer != nil
 	}
 
-	_ = aghhttp.WriteJSONResponse(w, r, resp)
+	aghhttp.WriteJSONResponseOK(w, r, resp)
 }
 
 // ------------------------
 // registration of handlers
 // ------------------------
-func registerControlHandlers() {
+func registerControlHandlers(web *webAPI) {
+	Context.mux.HandleFunc(
+		"/control/version.json",
+		postInstall(optionalAuth(web.handleVersionJSON)),
+	)
+	httpRegister(http.MethodPost, "/control/update", web.handleUpdate)
+
 	httpRegister(http.MethodGet, "/control/status", handleStatus)
 	httpRegister(http.MethodPost, "/control/i18n/change_language", handleI18nChangeLanguage)
 	httpRegister(http.MethodGet, "/control/i18n/current_language", handleI18nCurrentLanguage)
-	Context.mux.HandleFunc("/control/version.json", postInstall(optionalAuth(handleVersionJSON)))
-	httpRegister(http.MethodPost, "/control/update", handleUpdate)
 	httpRegister(http.MethodGet, "/control/profile", handleGetProfile)
 	httpRegister(http.MethodPut, "/control/profile/update", handlePutProfile)
 
@@ -317,9 +315,10 @@ func preInstallHandler(handler http.Handler) http.Handler {
 	return &preInstallHandlerStruct{handler}
 }
 
-// handleHTTPSRedirect redirects the request to HTTPS, if needed.  If ok is
-// true, the middleware must continue handling the request.
-func handleHTTPSRedirect(w http.ResponseWriter, r *http.Request) (ok bool) {
+// handleHTTPSRedirect redirects the request to HTTPS, if needed, and adds some
+// HTTPS-related headers.  If proceed is true, the middleware must continue
+// handling the request.
+func handleHTTPSRedirect(w http.ResponseWriter, r *http.Request) (proceed bool) {
 	web := Context.web
 	if web.httpsServer.server == nil {
 		return true
@@ -335,7 +334,7 @@ func handleHTTPSRedirect(w http.ResponseWriter, r *http.Request) (ok bool) {
 	var (
 		forceHTTPS bool
 		serveHTTP3 bool
-		portHTTPS  int
+		portHTTPS  uint16
 	)
 	func() {
 		config.RLock()
@@ -358,21 +357,17 @@ func handleHTTPSRedirect(w http.ResponseWriter, r *http.Request) (ok bool) {
 		respHdr.Set(httphdr.AltSvc, altSvc)
 	}
 
-	if r.TLS == nil && forceHTTPS {
-		hostPort := host
-		if portHTTPS != defaultPortHTTPS {
-			hostPort = netutil.JoinHostPort(host, portHTTPS)
+	if forceHTTPS {
+		if r.TLS == nil {
+			u := httpsURL(r.URL, host, portHTTPS)
+			http.Redirect(w, r, u.String(), http.StatusTemporaryRedirect)
+
+			return false
 		}
 
-		httpsURL := &url.URL{
-			Scheme:   aghhttp.SchemeHTTPS,
-			Host:     hostPort,
-			Path:     r.URL.Path,
-			RawQuery: r.URL.RawQuery,
-		}
-		http.Redirect(w, r, httpsURL.String(), http.StatusTemporaryRedirect)
-
-		return false
+		// TODO(a.garipov): Consider adding a configurable max-age.  Currently,
+		// the default is 365 days.
+		respHdr.Set(httphdr.StrictTransportSecurity, aghhttp.HdrValStrictTransportSecurity)
 	}
 
 	// Allow the frontend from the HTTP origin to send requests to the HTTPS
@@ -391,6 +386,22 @@ func handleHTTPSRedirect(w http.ResponseWriter, r *http.Request) (ok bool) {
 	return true
 }
 
+// httpsURL returns a copy of u for redirection to the HTTPS version, taking the
+// hostname and the HTTPS port into account.
+func httpsURL(u *url.URL, host string, portHTTPS uint16) (redirectURL *url.URL) {
+	hostPort := host
+	if portHTTPS != defaultPortHTTPS {
+		hostPort = netutil.JoinHostPort(host, portHTTPS)
+	}
+
+	return &url.URL{
+		Scheme:   aghhttp.SchemeHTTPS,
+		Host:     hostPort,
+		Path:     u.Path,
+		RawQuery: u.RawQuery,
+	}
+}
+
 // postInstall lets the handler to run only if firstRun is false.  Otherwise, it
 // redirects to /install.html.  It also enforces HTTPS if it is enabled and
 // configured and sets appropriate access control headers.
@@ -404,11 +415,10 @@ func postInstall(handler func(http.ResponseWriter, *http.Request)) func(http.Res
 			return
 		}
 
-		if !handleHTTPSRedirect(w, r) {
-			return
+		proceed := handleHTTPSRedirect(w, r)
+		if proceed {
+			handler(w, r)
 		}
-
-		handler(w, r)
 	}
 }
 

@@ -5,8 +5,8 @@ import (
 	"net"
 	"testing"
 
+	"github.com/AdguardTeam/AdGuardHome/internal/aghnet"
 	"github.com/AdguardTeam/AdGuardHome/internal/filtering"
-	"github.com/AdguardTeam/golibs/stringutil"
 	"github.com/AdguardTeam/golibs/testutil"
 	"github.com/AdguardTeam/golibs/timeutil"
 	"github.com/miekg/dns"
@@ -43,11 +43,13 @@ func TestQueryLog(t *testing.T) {
 	// Add memory entries.
 	addEntry(l, "test.example.org", net.IPv4(1, 1, 1, 3), net.IPv4(2, 2, 2, 3))
 	addEntry(l, "example.com", net.IPv4(1, 1, 1, 4), net.IPv4(2, 2, 2, 4))
+	addEntry(l, "", net.IPv4(1, 1, 1, 5), net.IPv4(2, 2, 2, 5))
 
 	type tcAssertion struct {
-		num            int
-		host           string
-		answer, client net.IP
+		host   string
+		answer net.IP
+		client net.IP
+		num    int
 	}
 
 	testCases := []struct {
@@ -58,10 +60,11 @@ func TestQueryLog(t *testing.T) {
 		name: "all",
 		sCr:  []searchCriterion{},
 		want: []tcAssertion{
-			{num: 0, host: "example.com", answer: net.IPv4(1, 1, 1, 4), client: net.IPv4(2, 2, 2, 4)},
-			{num: 1, host: "test.example.org", answer: net.IPv4(1, 1, 1, 3), client: net.IPv4(2, 2, 2, 3)},
-			{num: 2, host: "example.org", answer: net.IPv4(1, 1, 1, 2), client: net.IPv4(2, 2, 2, 2)},
-			{num: 3, host: "example.org", answer: net.IPv4(1, 1, 1, 1), client: net.IPv4(2, 2, 2, 1)},
+			{num: 0, host: ".", answer: net.IPv4(1, 1, 1, 5), client: net.IPv4(2, 2, 2, 5)},
+			{num: 1, host: "example.com", answer: net.IPv4(1, 1, 1, 4), client: net.IPv4(2, 2, 2, 4)},
+			{num: 2, host: "test.example.org", answer: net.IPv4(1, 1, 1, 3), client: net.IPv4(2, 2, 2, 3)},
+			{num: 3, host: "example.org", answer: net.IPv4(1, 1, 1, 2), client: net.IPv4(2, 2, 2, 2)},
+			{num: 4, host: "example.org", answer: net.IPv4(1, 1, 1, 1), client: net.IPv4(2, 2, 2, 1)},
 		},
 	}, {
 		name: "by_domain_strict",
@@ -103,10 +106,11 @@ func TestQueryLog(t *testing.T) {
 			value:         "2.2.2",
 		}},
 		want: []tcAssertion{
-			{num: 0, host: "example.com", answer: net.IPv4(1, 1, 1, 4), client: net.IPv4(2, 2, 2, 4)},
-			{num: 1, host: "test.example.org", answer: net.IPv4(1, 1, 1, 3), client: net.IPv4(2, 2, 2, 3)},
-			{num: 2, host: "example.org", answer: net.IPv4(1, 1, 1, 2), client: net.IPv4(2, 2, 2, 2)},
-			{num: 3, host: "example.org", answer: net.IPv4(1, 1, 1, 1), client: net.IPv4(2, 2, 2, 1)},
+			{num: 0, host: ".", answer: net.IPv4(1, 1, 1, 5), client: net.IPv4(2, 2, 2, 5)},
+			{num: 1, host: "example.com", answer: net.IPv4(1, 1, 1, 4), client: net.IPv4(2, 2, 2, 4)},
+			{num: 2, host: "test.example.org", answer: net.IPv4(1, 1, 1, 3), client: net.IPv4(2, 2, 2, 3)},
+			{num: 3, host: "example.org", answer: net.IPv4(1, 1, 1, 2), client: net.IPv4(2, 2, 2, 2)},
+			{num: 4, host: "example.org", answer: net.IPv4(1, 1, 1, 1), client: net.IPv4(2, 2, 2, 1)},
 		},
 	}}
 
@@ -139,13 +143,13 @@ func TestQueryLogOffsetLimit(t *testing.T) {
 		secondPageDomain = "second.example.org"
 	)
 	// Add entries to the log.
-	for i := 0; i < entNum; i++ {
+	for range entNum {
 		addEntry(l, secondPageDomain, net.IPv4(1, 1, 1, 1), net.IPv4(2, 2, 2, 1))
 	}
 	// Write them to the first file.
 	require.NoError(t, l.flushLogBuffer())
 	// Add more to the in-memory part of log.
-	for i := 0; i < entNum; i++ {
+	for range entNum {
 		addEntry(l, firstPageDomain, net.IPv4(1, 1, 1, 1), net.IPv4(2, 2, 2, 1))
 	}
 
@@ -211,7 +215,7 @@ func TestQueryLogMaxFileScanEntries(t *testing.T) {
 
 	const entNum = 10
 	// Add entries to the log.
-	for i := 0; i < entNum; i++ {
+	for range entNum {
 		addEntry(l, "example.org", net.IPv4(1, 1, 1, 1), net.IPv4(2, 2, 2, 1))
 	}
 	// Write them to disk.
@@ -252,10 +256,21 @@ func TestQueryLogFileDisabled(t *testing.T) {
 
 func TestQueryLogShouldLog(t *testing.T) {
 	const (
-		ignored1 = "ignor.ed"
-		ignored2 = "ignored.to"
+		ignored1        = "ignor.ed"
+		ignored2        = "ignored.to"
+		ignoredWildcard = "*.ignored.com"
+		ignoredRoot     = "|.^"
 	)
-	set := stringutil.NewSet(ignored1, ignored2)
+
+	ignored := []string{
+		ignored1,
+		ignored2,
+		ignoredWildcard,
+		ignoredRoot,
+	}
+
+	engine, err := aghnet.NewIgnoreEngine(ignored)
+	require.NoError(t, err)
 
 	findClient := func(ids []string) (c *Client, err error) {
 		log := ids[0] == "no_log"
@@ -264,7 +279,7 @@ func TestQueryLogShouldLog(t *testing.T) {
 	}
 
 	l, err := newQueryLog(Config{
-		Ignored:     set,
+		Ignored:     engine,
 		Enabled:     true,
 		RotationIvl: timeutil.Day,
 		MemSize:     100,
@@ -291,6 +306,16 @@ func TestQueryLogShouldLog(t *testing.T) {
 	}, {
 		name:    "no_log_ignored_2",
 		host:    ignored2,
+		ids:     []string{"whatever"},
+		wantLog: false,
+	}, {
+		name:    "no_log_ignored_wildcard",
+		host:    "www.ignored.com",
+		ids:     []string{"whatever"},
+		wantLog: false,
+	}, {
+		name:    "no_log_ignored_root",
+		host:    ".",
 		ids:     []string{"whatever"},
 		wantLog: false,
 	}, {

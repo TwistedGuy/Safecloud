@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -15,6 +16,7 @@ import (
 	"github.com/AdguardTeam/AdGuardHome/internal/next/dnssvc"
 	"github.com/AdguardTeam/AdGuardHome/internal/next/websvc"
 	"github.com/AdguardTeam/golibs/testutil"
+	"github.com/AdguardTeam/golibs/testutil/fakefs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -87,7 +89,13 @@ func newTestServer(
 	t.Helper()
 
 	c := &websvc.Config{
-		ConfigManager:   confMgr,
+		Pprof: &websvc.PprofConfig{
+			Enabled: false,
+		},
+		ConfigManager: confMgr,
+		Frontend: &fakefs.FS{
+			OnOpen: func(_ string) (_ fs.File, _ error) { return nil, fs.ErrNotExist },
+		},
 		TLS:             nil,
 		Addresses:       []netip.AddrPort{netip.MustParseAddrPort("127.0.0.1:0")},
 		SecureAddresses: nil,
@@ -96,9 +104,10 @@ func newTestServer(
 		ForceHTTPS:      false,
 	}
 
-	svc = websvc.New(c)
+	svc, err := websvc.New(c)
+	require.NoError(t, err)
 
-	err := svc.Start()
+	err = svc.Start()
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), testTimeout)

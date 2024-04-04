@@ -1,12 +1,15 @@
 package safesearch_test
 
 import (
+	"context"
 	"net"
+	"net/netip"
 	"testing"
 	"time"
 
 	"github.com/AdguardTeam/AdGuardHome/internal/aghtest"
 	"github.com/AdguardTeam/AdGuardHome/internal/filtering"
+	"github.com/AdguardTeam/AdGuardHome/internal/filtering/rulelist"
 	"github.com/AdguardTeam/AdGuardHome/internal/filtering/safesearch"
 	"github.com/AdguardTeam/golibs/testutil"
 	"github.com/miekg/dns"
@@ -42,7 +45,7 @@ var testConf = filtering.SafeSearchConfig{
 
 // yandexIP is the expected IP address of Yandex safe search results.  Keep in
 // sync with the rules data.
-var yandexIP = net.IPv4(213, 180, 193, 56)
+var yandexIP = netip.AddrFrom4([4]byte{213, 180, 193, 56})
 
 func TestDefault_CheckHost_yandex(t *testing.T) {
 	conf := testConf
@@ -67,13 +70,39 @@ func TestDefault_CheckHost_yandex(t *testing.T) {
 		require.Len(t, res.Rules, 1)
 
 		assert.Equal(t, yandexIP, res.Rules[0].IP)
-		assert.EqualValues(t, filtering.SafeSearchListID, res.Rules[0].FilterListID)
+		assert.Equal(t, rulelist.URLFilterIDSafeSearch, res.Rules[0].FilterListID)
 	}
 }
 
+func TestDefault_CheckHost_yandexAAAA(t *testing.T) {
+	conf := testConf
+	ss, err := safesearch.NewDefault(conf, "", testCacheSize, testCacheTTL)
+	require.NoError(t, err)
+
+	res, err := ss.CheckHost("www.yandex.ru", dns.TypeAAAA)
+	require.NoError(t, err)
+
+	assert.True(t, res.IsFiltered)
+
+	// TODO(a.garipov): Currently, the safe-search filter returns a single rule
+	// with a nil IP address.  This isn't really necessary and should be changed
+	// once the TODO in [safesearch.Default.newResult] is resolved.
+	require.Len(t, res.Rules, 1)
+
+	assert.Empty(t, res.Rules[0].IP)
+	assert.Equal(t, rulelist.URLFilterIDSafeSearch, res.Rules[0].FilterListID)
+}
+
 func TestDefault_CheckHost_google(t *testing.T) {
-	resolver := &aghtest.TestResolver{}
-	ip, _ := resolver.HostToIPs("forcesafesearch.google.com")
+	resolver := &aghtest.Resolver{
+		OnLookupIP: func(_ context.Context, _, host string) (ips []net.IP, err error) {
+			ip4, ip6 := aghtest.HostToIPs(host)
+
+			return []net.IP{ip4.AsSlice(), ip6.AsSlice()}, nil
+		},
+	}
+
+	wantIP, _ := aghtest.HostToIPs("forcesafesearch.google.com")
 
 	conf := testConf
 	conf.CustomResolver = resolver
@@ -99,10 +128,60 @@ func TestDefault_CheckHost_google(t *testing.T) {
 
 			require.Len(t, res.Rules, 1)
 
-			assert.Equal(t, ip, res.Rules[0].IP)
-			assert.EqualValues(t, filtering.SafeSearchListID, res.Rules[0].FilterListID)
+			assert.Equal(t, wantIP, res.Rules[0].IP)
+			assert.Equal(t, rulelist.URLFilterIDSafeSearch, res.Rules[0].FilterListID)
 		})
 	}
+}
+
+// testResolver is a [filtering.Resolver] for tests.
+//
+// TODO(a.garipov): Move to aghtest and use everywhere.
+type testResolver struct {
+	OnLookupIP func(ctx context.Context, network, host string) (ips []net.IP, err error)
+}
+
+// type check
+var _ filtering.Resolver = (*testResolver)(nil)
+
+// LookupIP implements the [filtering.Resolver] interface for *testResolver.
+func (r *testResolver) LookupIP(
+	ctx context.Context,
+	network string,
+	host string,
+) (ips []net.IP, err error) {
+	return r.OnLookupIP(ctx, network, host)
+}
+
+func TestDefault_CheckHost_duckduckgoAAAA(t *testing.T) {
+	conf := testConf
+	conf.CustomResolver = &testResolver{
+		OnLookupIP: func(_ context.Context, network, host string) (ips []net.IP, err error) {
+			assert.Equal(t, "ip6", network)
+			assert.Equal(t, "safe.duckduckgo.com", host)
+
+			return nil, nil
+		},
+	}
+
+	ss, err := safesearch.NewDefault(conf, "", testCacheSize, testCacheTTL)
+	require.NoError(t, err)
+
+	// The DuckDuckGo safe-search addresses are resolved through CNAMEs, but
+	// DuckDuckGo doesn't have a safe-search IPv6 address.  The result should be
+	// the same as the one for Yandex IPv6.  That is, a NODATA response.
+	res, err := ss.CheckHost("www.duckduckgo.com", dns.TypeAAAA)
+	require.NoError(t, err)
+
+	assert.True(t, res.IsFiltered)
+
+	// TODO(a.garipov): Currently, the safe-search filter returns a single rule
+	// with a nil IP address.  This isn't really necessary and should be changed
+	// once the TODO in [safesearch.Default.newResult] is resolved.
+	require.Len(t, res.Rules, 1)
+
+	assert.Empty(t, res.Rules[0].IP)
+	assert.Equal(t, rulelist.URLFilterIDSafeSearch, res.Rules[0].FilterListID)
 }
 
 func TestDefault_Update(t *testing.T) {
